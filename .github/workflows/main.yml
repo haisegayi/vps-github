@@ -1,0 +1,117 @@
+name: RDP Mobile Optimized
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Optimize Windows for RDP
+        run: |
+          # Tối ưu hệ thống cho RDP
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          
+          # Tối ưu hiệu suất RDP
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxMonitors" -Value 4 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxXResolution" -Value 1920 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxYResolution" -Value 1080 -Force
+          
+          # Giảm chất lượng hình ảnh để tăng tốc độ
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxColorDepth" -Value 16 -Force
+          
+          # Tối ưu network
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name "Tcp1323Opts" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name "TCPWindowSize" -Value 64240 -Force
+          
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+
+      - name: Create Optimized User
+        run: |
+          $password = "Mobile@" + (Get-Random -Minimum 1000 -Maximum 9999)
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          
+          New-LocalUser -Name "MobileUser" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "MobileUser"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "MobileUser"
+          
+          "RDP_USER=MobileUser" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RDP_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install Tailscale with Optimizations
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+          Start-Sleep -Seconds 5
+
+      - name: Configure Tailscale for Low Latency
+        run: |
+          # Cấu hình Tailscale cho tốc độ tốt nhất
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --login-server=https://login.tailscale.com --accept-routes --hostname=fast-rdp-$env:GITHUB_RUN_ID
+          
+          # Đợi kết nối
+          $tsIP = $null
+          for ($i = 0; $i -lt 20; $i++) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+            if ($tsIP) { 
+              "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Append
+              break 
+            }
+            Start-Sleep -Seconds 2)
+          }
+
+      - name: Apply Performance Tweaks
+        run: |
+          # Giảm tải hệ thống
+          Get-Service -Name "SysMain" | Stop-Service -Force
+          Set-Service -Name "SysMain" -StartupType Disabled
+          
+          # Tắt visual effects để tăng performance
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name "VisualFXSetting" -Value 2 -Force
+          
+          # Tối ưu power plan cho performance
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c  # High performance
+          
+          Write-Host "Performance optimizations applied"
+
+      - name: Display Optimized Connection Info
+        run: |
+          Write-Host "=========================================="
+          Write-Host "🚀 OPTIMIZED MOBILE RDP - LOW LAG"
+          Write-Host "=========================================="
+          Write-Host "IP: $env:TAILSCALE_IP"
+          Write-Host "User: $env:RDP_USER"
+          Write-Host "Pass: $env:RDP_PASSWORD"
+          Write-Host ""
+          Write-Host "📱 MOBILE SETTINGS FOR BEST PERFORMANCE:"
+          Write-Host "1. Turn OFF 'Security Layer'"
+          Write-Host "2. Color: 16-bit (High Color)"
+          Write-Host "3. Resolution: 1280x720"
+          Write_Host "4. Turn OFF 'Persistent bitmap caching'"
+          Write-Host "5. Turn ON 'Compression'"
+          Write-Host "=========================================="
+
+      - name: Monitor Performance
+        run: |
+          $counter = 0
+          while ($true) {
+            $counter++
+            
+            # Kiểm tra ping mỗi 5 phút
+            if ($counter % 5 -eq 0) {
+              $pingResult = Test-Connection -ComputerName $env:TAILSCALE_IP -Count 3 -Quiet
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Performance Check - Ping: $pingResult - Session: $counter minutes"
+            } else {
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Active - $counter minutes - IP: $env:TAILSCALE_IP"
+            }
+            
+            Start-Sleep -Seconds 60
+          }
