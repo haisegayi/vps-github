@@ -1,0 +1,170 @@
+name: RDP Mobile Asia Optimized
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Check Runner Location
+        run: |
+          Write-Host "Checking Runner Location..."
+          try {
+            $locationInfo = Invoke-RestMethod -Uri "http://ipinfo.io/json" -TimeoutSec 10
+            Write-Host "Runner Location: $($locationInfo.city), $($locationInfo.region), $($locationInfo.country)"
+            Write-Host "ISP: $($locationInfo.org)"
+            Write-Host "IP: $($locationInfo.ip)"
+            
+            # Check if in Asia, if not suggest alternatives
+            if ($locationInfo.country -notin @('SG', 'JP', 'HK', 'TW', 'KR', 'MY', 'TH', 'VN', 'ID', 'PH')) {
+              Write-Host "⚠️  Runner is not in Asia. For better ping, consider:"
+              Write-Host "    - Using VPS in Singapore/Japan"
+              Write-Host "    - Oracle Cloud Free Tier (Asia regions)"
+            }
+          } catch {
+            Write-Host "Cannot determine location, but continuing..."
+          }
+
+      - name: Configure RDP for Asia Mobile
+        run: |
+          Write-Host "Optimizing RDP for Asia region..."
+          # Enable Remote Desktop
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          
+          # Asia-optimized settings
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxCompressionLevel" -Value 2 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MinEncryptionLevel" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxXResolution" -Value 1280 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxYResolution" -Value 720 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxColorDepth" -Value 16 -Force
+          
+          # Network optimizations
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name "Tcp1323Opts" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name "TCPWindowSize" -Value 64240 -Force
+          
+          # Fix firewall rule
+          netsh advfirewall firewall delete rule name="RDP" 2>$null
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          
+          Restart-Service -Name TermService -Force
+          Write-Host "RDP optimized for Asia region"
+
+      - name: Create Asia Optimized User
+        run: |
+          # Simple password for mobile
+          $password = "Asia@" + (Get-Random -Minimum 1000 -Maximum 9999)
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          
+          New-LocalUser -Name "AsiaUser" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "AsiaUser"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "AsiaUser"
+          
+          "RDP_USER=AsiaUser" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RDP_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "User AsiaUser created"
+
+      - name: Install Tailscale
+        run: |
+          Write-Host "Installing Tailscale..."
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+          Start-Sleep -Seconds 8
+
+      - name: Setup Tailscale Connection
+        run: |
+          Write-Host "Setting up Tailscale connection..."
+          
+          # Start Tailscale
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --login-server=https://login.tailscale.com --accept-routes --hostname=asia-rdp-$env:GITHUB_RUN_ID
+          
+          # Get login URL
+          Start-Sleep -Seconds 5
+          Write-Host "Getting authentication URL..."
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --qr
+          
+          # Wait for connection
+          $tsIP = $null
+          for ($i = 1; $i -le 25; $i++) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+            if ($tsIP -and $tsIP.StartsWith('100.')) { 
+              "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Append
+              Write-Host "Tailscale IP: $tsIP"
+              break 
+            }
+            Write-Host "Waiting for IP... ($i/25)"
+            Start-Sleep -Seconds 2
+          }
+
+      - name: Apply Performance Tweaks
+        run: |
+          Write-Host "Applying performance tweaks..."
+          
+          # Set high performance power plan
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          
+          # Optimize for mobile
+          Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Terminal Server Client' -Name "AuthenticationLevel" -Value 0 -Force
+          Write-Host "Performance optimizations applied"
+
+      - name: Display Connection Info
+        run: |
+          Write-Host ""
+          Write-Host "=" * 50
+          Write-Host "ASIA OPTIMIZED RDP - READY"
+          Write-Host "=" * 50
+          Write-Host "IP: $env:TAILSCALE_IP"
+          Write-Host "User: $env:RDP_USER"
+          Write-Host "Pass: $env:RDP_PASSWORD"
+          Write-Host ""
+          Write-Host "AUTHENTICATION REQUIRED:"
+          Write-Host "1. Go to: https://login.tailscale.com/admin/machines"
+          Write-Host "2. Find device: asia-rdp-$env:GITHUB_RUN_ID"
+          Write-Host "3. Click 'Authorize' if needed"
+          Write_Host "4. Wait 1-2 minutes for IP"
+          Write-Host ""
+          Write-Host "MOBILE SETTINGS:"
+          Write-Host "- Turn OFF 'RDP Security Layer'"
+          Write-Host "- Resolution: 1280x720"
+          Write-Host "- Color: 16-bit"
+          Write-Host "=" * 50
+          Write-Host ""
+
+      - name: Maintain Session
+        run: |
+          Write-Host "RDP Session Active - Connect from your mobile"
+          Write-Host "This session will run for maximum 6 hours"
+          
+          $startTime = Get-Date
+          while ($true) {
+            $elapsed = [int]((Get-Date - $startTime).TotalMinutes)
+            
+            # Check if 6 hours reached
+            if ($elapsed -ge 360) {
+              Write-Host "Session timeout reached (6 hours). Stopping..."
+              break
+            }
+            
+            # Update IP every 10 minutes
+            if ($elapsed % 10 -eq 0) {
+              $currentIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+              if ($currentIP -and $currentIP -ne $env:TAILSCALE_IP) {
+                "TAILSCALE_IP=$currentIP" | Out-File -FilePath $env:GITHUB_ENV -Append
+                Write-Host "Updated IP: $currentIP"
+              }
+            }
+            
+            # Display status every 5 minutes
+            if ($elapsed % 5 -eq 0) {
+              Write-Host "[$(Get-Date -Format 'HH:mm')] Active - $elapsed minutes - IP: $env:TAILSCALE_IP"
+            }
+            
+            Start-Sleep -Seconds 60
+          }
