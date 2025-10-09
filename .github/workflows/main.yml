@@ -1,0 +1,141 @@
+name: RDP Mobile
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Configure RDP Settings
+        run: |
+          Write-Host "Configuring RDP..."
+          # Enable RDP
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+          
+          # Configure firewall (sửa lỗi không tìm thấy rule)
+          netsh advfirewall firewall delete rule name="RDP" 2>$null || echo "No existing rule to delete"
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          
+          Restart-Service -Name TermService -Force
+          Write-Host "RDP configured successfully"
+
+      - name: Create RDP User
+        run: |
+          Write-Host "Creating user..."
+          # Password đơn giản
+          $password = "Mobile" + (Get-Random -Maximum 99999)
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          
+          # Tạo user
+          New-LocalUser -Name "MobileUser" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "MobileUser"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "MobileUser"
+          
+          "RDP_USER=MobileUser" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RDP_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "User created: MobileUser / $password"
+
+      - name: Install Tailscale
+        run: |
+          Write-Host "Installing Tailscale..."
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+          Start-Sleep -Seconds 10
+          Write-Host "Tailscale installed"
+
+      - name: Authenticate Tailscale
+        run: |
+          Write-Host "Authenticating Tailscale..."
+          
+          # Chạy Tailscale và bắt URL đăng nhập
+          $output = & "$env:ProgramFiles\Tailscale\tailscale.exe" up --qr 2>&1 | Out-String
+          Write-Host "Tailscale output: $output"
+          
+          # Trích xuất URL đăng nhập
+          if ($output -match '(https://login\.tailscale\.com/a/[a-zA-Z0-9]+)') {
+            $loginUrl = $matches[1]
+            Write-Host "LOGIN_URL=$loginUrl" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "✅ Login URL: $loginUrl"
+          } else {
+            Write-Host "⚠️ No login URL found, check manually at: https://login.tailscale.com/admin/machines"
+          }
+
+      - name: Wait for Authentication
+        run: |
+          Write-Host "Waiting for authentication..."
+          Write-Host "Please visit this URL to authenticate: $env:LOGIN_URL"
+          Write-Host "Or go to: https://login.tailscale.com/admin/machines"
+          Write-Host ""
+          Write-Host "After authenticating, wait for IP address below..."
+          
+          # Chờ authentication và lấy IP
+          $tsIP = $null
+          for ($i = 1; $i -le 30; $i++) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+            if ($tsIP -and $tsIP.StartsWith('100.')) {
+              "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Append
+              Write-Host "✅ Tailscale IP: $tsIP"
+              break
+            }
+            Write-Host "⏳ Waiting for IP... ($i/30)"
+            Start-Sleep -Seconds 5
+          }
+          
+          if (-not $tsIP) {
+            Write-Host "❌ No IP received. Please check: https://login.tailscale.com/admin/machines"
+            Write-Host "Look for device and authorize it manually"
+          }
+
+      - name: Display Connection Info
+        run: |
+          Write-Host ""
+          Write-Host "=" * 50
+          Write-Host "📱 RDP CONNECTION INFORMATION"
+          Write-Host "=" * 50
+          Write-Host "IP Address: $env:TAILSCALE_IP"
+          Write-Host "Username: $env:RDP_USER"
+          Write-Host "Password: $env:RDP_PASSWORD"
+          Write-Host ""
+          Write-Host "🔗 Authenticate here: $env:LOGIN_URL"
+          Write-Host "Or: https://login.tailscale.com/admin/machines"
+          Write-Host ""
+          Write-Host "📝 MOBILE INSTRUCTIONS:"
+          Write-Host "1. Install Microsoft Remote Desktop"
+          Write-Host "2. Add PC: $env:TAILSCALE_IP"
+          Write-Host "3. Username: $env:RDP_USER"
+          Write-Host "4. Password: $env:RDP_PASSWORD"
+          Write-Host "5. In Settings → Advanced → Turn OFF 'Security Layer'"
+          Write-Host "=" * 50
+
+      - name: Keep Alive
+        run: |
+          Write-Host "🟢 RDP Session Active - Keep this window open"
+          Write-Host "⏰ Session will auto-close in 55 minutes"
+          
+          $startTime = Get-Date
+          while ($true) {
+            $elapsed = [int]((Get-Date) - $startTime).TotalMinutes
+            $remaining = 55 - $elapsed
+            
+            if ($remaining -le 0) {
+              Write-Host "🛑 Session ended (55 minute limit)"
+              break
+            }
+            
+            # Hiển thị status mỗi 2 phút
+            if ($elapsed % 2 -eq 0) {
+              # Kiểm tra IP hiện tại
+              $currentIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+              Write-Host "[$(Get-Date -Format 'HH:mm')] Active - $elapsed min - IP: $currentIP - $remaining min left"
+            }
+            
+            Start-Sleep -Seconds 60
+          }
