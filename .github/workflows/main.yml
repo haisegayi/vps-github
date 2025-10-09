@@ -1,0 +1,111 @@
+name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Configure Core RDP Settings
+        run: |
+          # Enable Remote Desktop với cài đặt bảo mật phù hợp cho mobile
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          
+          # KEEP NLA enabled for mobile compatibility (CHANGE THIS)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 2 -Force
+          
+          # Additional settings for mobile compatibility
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MinEncryptionLevel" -Value 2 -Force
+          
+          # Configure firewall
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>$null
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          
+          # Restart services
+          Restart-Service -Name TermService -Force
+          Restart-Service -Name SessionEnv -Force
+
+      - name: Create RDP User with Secure Password
+        run: |
+          # Tạo password đơn giản hơn (tránh ký tự đặc biệt phức tạp)
+          $charSet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+          $password = -join ((1..10) | ForEach-Object { $charSet[(Get-Random -Maximum $charSet.Length)] })
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          
+          # Tạo user
+          New-LocalUser -Name "MobileUser" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "MobileUser"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "MobileUser"
+          
+          # Set environment variables
+          "RDP_USER=MobileUser" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RDP_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+          Start-Sleep -Seconds 10
+
+      - name: Establish Tailscale Connection
+        run: |
+          # Sử dụng auth key đúng cách
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --accept-routes=true --hostname=mobile-rdp-$env:GITHUB_RUN_ID
+          
+          # Chờ kết nối
+          $tsIP = $null
+          for ($i = 0; $i -lt 30; $i++) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+            if ($tsIP) { break }
+            Start-Sleep -Seconds 3
+          }
+          
+          if ($tsIP) {
+            "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "Tailscale IP: $tsIP"
+          } else {
+            Write-Host "ERROR: Cannot get Tailscale IP"
+            exit 1
+          }
+
+      - name: Verify RDP Setup
+        run: |
+          # Kiểm tra dịch vụ RDP
+          $rdpService = Get-Service -Name TermService
+          $nlaSetting = Get-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -ErrorAction SilentlyContinue
+          
+          Write-Host "RDP Service Status: $($rdpService.Status)"
+          Write-Host "NLA Enabled: $($nlaSetting.UserAuthentication)"
+          Write-Host "Ready for mobile connection"
+
+      - name: Maintain Connection
+        run: |
+          Write-Host "=========================================="
+          Write-Host "MOBILE RDP READY"
+          Write-Host "=========================================="
+          Write-Host "IP: $env:TAILSCALE_IP"
+          Write-Host "Username: $env:RDP_USER"
+          Write-Host "Password: $env:RDP_PASSWORD"
+          Write-Host ""
+          Write-Host "INSTRUCTIONS FOR MOBILE:"
+          Write-Host "1. Install Microsoft Remote Desktop app"
+          Write-Host "2. Add new connection with above IP"
+          Write-Host "3. Username: $env:RDP_USER"
+          Write-Host "4. Password: $env:RDP_PASSWORD"
+          Write-Host "5. Turn OFF 'Use RDP Security Layer' in settings"
+          Write-Host "=========================================="
+          
+          $counter = 0
+          while ($true) {
+            $counter++
+            $currentTime = Get-Date -Format "HH:mm:ss"
+            Write-Host "[$currentTime] Mobile RDP Active - $counter minutes"
+            Start-Sleep -Seconds 60
+          }
