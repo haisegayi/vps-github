@@ -1,0 +1,85 @@
+name: RDP Vietnam Optimized
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Vietnam Optimized Setup
+        run: |
+          Write-Host "🇻🇳 Optimizing for Vietnam connection..."
+          
+          # RDP Configuration
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          
+          # High-latency optimization for Vietnam
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxCompressionLevel" -Value 2 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MinEncryptionLevel" -Value 1 -Force
+          
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+
+      - name: Create Vietnam User
+        run: |
+          $password = "Vietnam@" + (Get-Random -Minimum 1000 -Maximum 9999)
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          
+          New-LocalUser -Name "VietnamUser" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "VietnamUser"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "VietnamUser"
+          
+          "RDP_USER=VietnamUser" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RDP_PASSWORD=$password" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install Tailscale with Exit Node
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+          Start-Sleep -Seconds 5)
+
+      - name: Setup Vietnam Optimized Tailscale
+        run: |
+          Write-Host "🔗 Setting up Vietnam-optimized connection..."
+          
+          # Dùng hostname có ý nghĩa
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --login-server=https://login.tailscale.com --accept-routes --hostname=vietnam-rdp-$env:GITHUB_RUN_ID --advertise-exit-node
+          
+          Start-Sleep -Seconds 3
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --qr
+          
+          $tsIP = $null
+          for ($i = 0; $i -lt 30; $i++) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+            if ($tsIP) { 
+              "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Append
+              Write-Host "✅ Vietnam RDP Ready - IP: $tsIP"
+              break 
+            }
+            Start-Sleep -Seconds 2
+          }
+
+      - name: Display Vietnam Connection Info
+        run: |
+          Write-Host ""
+          Write-Host "=" * 50
+          Write-Host "🇻🇳 VIETNAM OPTIMIZED RDP"
+          Write-Host "=" * 50
+          Write-Host "📍 For best performance from Vietnam:"
+          Write-Host "IP: $env:TAILSCALE_IP"
+          Write-Host "User: $env:RDP_USER"
+          Write-Host "Pass: $env:RDP_PASSWORD"
+          Write-Host ""
+          Write-Host "🚀 RECOMMENDED FOR BETTER PING:"
+          Write-Host "• Oracle Cloud Free (Singapore)"
+          Write-Host "• AWS Singapore/Tokyo"
+          Write-Host "• DigitalOcean Singapore"
+          Write-Host "=" * 50
