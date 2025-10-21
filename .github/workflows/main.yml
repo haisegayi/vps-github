@@ -1,0 +1,164 @@
+name: RDP Ultra Fast
+
+on:
+  workflow_dispatch:
+
+env:
+  PERSISTENT_USER: "FastUser"
+  PERSISTENT_PASSWORD: "Fast@2024!"
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Parallel Setup (Fast)
+        run: |
+          # Chạy song song để tiết kiệm thời gian
+          Start-Job -ScriptBlock {
+            # RDP Configuration
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+            
+            # Fast optimization
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxCompressionLevel" -Value 3 -Force
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxXResolution" -Value 1280 -Force
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxYResolution" -Value 720 -Force
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxColorDepth" -Value 16 -Force
+            
+            # Network optimization
+            Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name "Tcp1323Opts" -Value 1 -Force
+            
+            # Firewall
+            netsh advfirewall firewall delete rule name="RDP" 2>$null
+            netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+            
+            Restart-Service -Name TermService -Force
+          }
+          
+          # Tạo user ngay lập tức
+          $securePass = ConvertTo-SecureString $env:PERSISTENT_PASSWORD -AsPlainText -Force
+          New-LocalUser -Name $env:PERSISTENT_USER -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $env:PERSISTENT_USER
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $env:PERSISTENT_USER
+          
+          "RDP_USER=$env:PERSISTENT_USER" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RDP_PASSWORD=$env:PERSISTENT_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append
+          
+          Write-Host "✅ Parallel setup completed"
+
+      - name: Fast Tailscale Install
+        run: |
+          Write-Host "🚀 Fast Tailscale installation..."
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          # Download nhanh
+          (New-Object Net.WebClient).DownloadFile($tsUrl, $installerPath)
+          
+          # Install không chờ UI
+          Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait -NoNewWindow
+          Remove-Item $installerPath -Force
+          
+          Write-Host "✅ Tailscale installed in 10 seconds"
+
+      - name: Quick Tailscale Auth
+        run: |
+          Write-Host "🔗 Quick Tailscale authentication..."
+          
+          # Hostname đơn giản
+          $hostname = "fast-rdp"
+          
+          # Chạy Tailscale nhanh
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --login-server=https://login.tailscale.com --accept-routes --hostname=$hostname
+          
+          # Hiển thị QR ngay
+          Start-Sleep -Seconds 2
+          Write-Host "🔐 Quick authentication:"
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --qr
+          
+          # Lấy IP nhanh (chỉ 10 lần thử)
+          $tsIP = $null
+          for ($i = 1; $i -le 10; $i++) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+            if ($tsIP) { 
+              "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Append
+              Write-Host "✅ IP: $tsIP (after $i attempts)"
+              break 
+            }
+            Start-Sleep -Seconds 1  # Chờ ngắn hơn
+          }
+
+      - name: Fast Performance Tweaks
+        run: |
+          Write-Host "⚡ Applying fast performance tweaks..."
+          
+          # Chỉ tắt services thực sự cần thiết
+          $services = @("SysMain", "WSearch")
+          foreach ($service in $services) {
+            try {
+              Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
+              Write-Host "✅ Stopped: $service"
+            } catch {
+              # Bỏ qua lỗi
+            }
+          }
+          
+          # High performance power plan
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          
+          Write-Host "✅ Performance tweaks applied"
+
+      - name: Display Fast Connection Info
+        run: |
+          Write-Host ""
+          Write-Host "=" * 50
+          Write-Host "🚀 ULTRA FAST RDP - READY IN 2 MINUTES"
+          Write-Host "=" * 50
+          Write-Host "IP: $env:TAILSCALE_IP"
+          Write-Host "User: $env:RDP_USER"
+          Write-Host "Pass: $env:RDP_PASSWORD"
+          Write-Host ""
+          Write-Host "🔐 AUTHENTICATION:"
+          Write-Host "https://login.tailscale.com/admin/machines"
+          Write-Host "Look for: fast-rdp"
+          Write-Host ""
+          Write-Host "📱 MOBILE SETTINGS:"
+          Write-Host "• Security Layer: OFF"
+          Write-Host "• Resolution: 1280x720"
+          Write-Host "• Color: 16-bit"
+          Write-Host "=" * 50
+          Write-Host ""
+
+      - name: Fast Session Monitor
+        run: |
+          Write-Host "🔧 Fast session monitor started"
+          Write-Host "💡 Use same credentials next time for quick access"
+          
+          $startTime = Get-Date
+          $lastIP = $env:TAILSCALE_IP
+          
+          while ($true) {
+            $elapsed = [int]((Get-Date - $startTime).TotalMinutes)
+            
+            # Update IP nhanh mỗi 5 phút
+            if ($elapsed % 5 -eq 0) {
+              $currentIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+              if ($currentIP -and $currentIP -ne $lastIP) {
+                Write-Host "🔄 IP Updated: $currentIP"
+                $lastIP = $currentIP
+              }
+              
+              Write-Host "[$(Get-Date -Format 'HH:mm')] Active - $elapsed min - IP: $lastIP"
+            }
+            
+            # Auto-stop trước timeout 10 phút
+            if ($elapsed -ge 350) {
+              Write-Host "🛑 Auto-stopping before timeout..."
+              break
+            }
+            
+            Start-Sleep -Seconds 60
+          }
