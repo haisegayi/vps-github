@@ -1,0 +1,235 @@
+name: RDP Mobile Optimized - Low Latency
+
+on:
+  workflow_dispatch:
+
+env:
+  FIXED_PASSWORD: "Mobile@1234"
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Clean Previous Session
+        run: |
+          Write-Host "🧹 Cleaning previous session..."
+          Get-Process "tailscale*" -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 1
+
+      - name: Ultra Low Latency RDP Setup
+        run: |
+          Write-Host "⚡ Configuring ultra low latency RDP..."
+          
+          # Cấu hình RDP cho độ trễ thấp nhất
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 0 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v SecurityLayer /t REG_DWORD /d 0 /f
+          
+          # QUAN TRỌNG: Cấu hình giảm độ trễ input
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v MinSendInterval /t REG_DWORD /d 0 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v KeepAliveTimeout /t REG_DWORD /d 1 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v KeepAliveInterval /t REG_DWORD /d 1 /f
+          
+          # Tối ưu cho high latency
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v FlowControlDisable /t REG_DWORD /d 1 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v DisableBandwidthDelay /t REG_DWORD /d 1 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v DisableFastPathInput /t REG_DWORD /d 0 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v DisableFastPathOutput /t REG_DWORD /d 0 /f
+          
+          # Chất lượng hình ảnh thấp để ưu tiên input
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v MaxColorDepth /t REG_DWORD /d 16 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v MaxXResolution /t REG_DWORD /d 1280 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v MaxYResolution /t REG_DWORD /d 720 /f
+          
+          # Tối ưu network stack
+          reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v Tcp1323Opts /t REG_DWORD /d 1 /f
+          reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v TCPWindowSize /t REG_DWORD /d 65535 /f
+          reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v DefaultTTL /t REG_DWORD /d 64 /f
+          reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v EnablePMTUDiscovery /t REG_DWORD /d 1 /f
+          reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v EnablePMTUBHDetect /t REG_DWORD /d 0 /f
+          
+          # Firewall
+          netsh advfirewall firewall delete rule name="RDP" 2>$null
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+
+      - name: Create User
+        run: |
+          net user MobileUser /delete 2>$null
+          net user MobileUser $env:FIXED_PASSWORD /add /y /expires:never
+          net localgroup administrators MobileUser /add
+          net localgroup "Remote Desktop Users" MobileUser /add
+          "RDP_USER=MobileUser" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install Tailscale with Exit Nodes
+        run: |
+          if (-not (Test-Path "$env:ProgramFiles\Tailscale\tailscale.exe")) {
+            $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+            $installerPath = "$env:TEMP\tailscale.msi"
+            curl -s -o $installerPath $tsUrl
+            Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait -NoNewWindow
+            Remove-Item $installerPath -Force
+            Start-Sleep -Seconds 3
+          }
+
+      - name: Configure Tailscale for Vietnam
+        run: |
+          Write-Host "🌏 Optimizing for Vietnam connection..."
+          
+          # Sử dụng exit node gần Việt Nam (Singapore/Hong Kong)
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --login-server=https://login.tailscale.com --accept-routes --hostname=vn-rdp-$env:GITHUB_RUN_ID --accept-dns=false
+          
+          # Đợi kết nối
+          $tsIP = $null
+          for ($i = 0; $i -lt 15; $i++) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+            if ($tsIP) { 
+              "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Append
+              break 
+            }
+            Start-Sleep -Seconds 2
+          }
+
+      - name: Apply Input Latency Optimizations
+        run: |
+          Write-Host "⌨️ Applying input latency optimizations..."
+          
+          # Tắt services gây lag
+          $servicesToDisable = @(
+            "SysMain", 
+            "WSearch",
+            "TabletInputService",
+            "Themes",
+            "FontCache"
+          )
+          
+          foreach ($service in $servicesToDisable) {
+            Stop-Service $service -Force -ErrorAction SilentlyContinue
+            Set-Service $service -StartupType Manual -ErrorAction SilentlyContinue
+          }
+          
+          # Tối ưu power plan cho responsiveness
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          powercfg /setdcvalueindex SCHEME_CURRENT SUB_VIDEO VIDEOCONLOCK 0
+          powercfg /setacvalueindex SCHEME_CURRENT SUB_VIDEO VIDEOCONLOCK 0
+          
+          # Tắt visual effects
+          reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v VisualFXSetting /t REG_DWORD /d 2 /f
+          
+          # Tối ưu mouse settings
+          reg add "HKCU\Control Panel\Mouse" /v MouseSensitivity /t REG_SZ /d "10" /f
+          reg add "HKCU\Control Panel\Mouse" /v MouseSpeed /t REG_SZ /d "0" /f
+          reg add "HKCU\Control Panel\Mouse" /v MouseThreshold1 /t REG_SZ /d "0" /f
+          reg add "HKCU\Control Panel\Mouse" /v MouseThreshold2 /t REG_SZ /d "0" /f
+
+      - name: Generate RDP File with Low Latency Settings
+        run: |
+          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+          if (-not $tsIP) { $tsIP = "waiting..." }
+          
+          # Tạo RDP file với settings tối ưu cho high latency
+          $rdpContent = @"
+screen mode id:i:2
+use multimon:i:0
+desktopwidth:i:1280
+desktopheight:i:720
+session bpp:i:16
+winposstr:s:0,1,0,0,800,600
+compression:i:1
+keyboardhook:i:2
+audiocapturemode:i:0
+videoplaybackmode:i:1
+connection type:i:7
+networkautodetect:i:1
+bandwidthautodetect:i:1
+displayconnectionbar:i:1
+enableworkspacereconnect:i:0
+disable wallpaper:i:1
+allow font smoothing:i:0
+allow desktop composition:i:0
+disable full window drag:i:1
+disable menu anims:i:1
+disable themes:i:0
+disable cursor setting:i:0
+bitmapcachepersistenable:i:0
+full address:s:$tsIP
+audiomode:i:0
+redirectprinters:i:0
+redirectcomports:i:0
+redirectsmartcards:i:0
+redirectwebauthn:i:0
+redirectclipboard:i:1
+redirectposdevices:i:0
+autoreconnection enabled:i:1
+authentication level:i:0
+prompt for credentials:i:0
+negotiate security layer:i:0
+remoteapplicationmode:i:0
+alternate shell:s:
+shell working directory:s:
+gatewayhostname:s:
+gatewayusagemethod:i:0
+gatewaycredentialssource:i:0
+gatewayprofileusagemethod:i:0
+promptcredentialonce:i:0
+use redirection server name:i:0
+rdgiskdcproxy:i:0
+kdcproxyname:s:
+username:s:MobileUser
+"@
+          
+          Write-Host "=========================================="
+          Write-Host "🎯 ULTRA LOW LATENCY RDP - FOR VIETNAM"
+          Write-Host "=========================================="
+          Write-Host "📍 IP: $tsIP"
+          Write-Host "👤 User: MobileUser"
+          Write-Host "🔑 Password: $env:FIXED_PASSWORD"
+          Write-Host ""
+          Write-Host "⚡ INPUT OPTIMIZATIONS APPLIED:"
+          Write-Host "• FastPath Input/Output enabled"
+          Write-Host "• Minimal send interval (0ms)"
+          Write-Host "• Low quality video (16-bit)"
+          Write-Host "• Mouse acceleration disabled"
+          Write-Host "• Network flow control optimized"
+          Write-Host ""
+          Write-Host "📋 MANUAL CLIENT SETTINGS:"
+          Write-Host "1. Experience: 'Low-speed broadband'"
+          Write-Host "2. Turn OFF: Persistent bitmap caching"
+          Write-Host "3. Turn ON: Compression"
+          Write-Host "4. Turn OFF: Desktop background"
+          Write-Host "5. Turn OFF: Visual effects"
+          Write-Host ""
+          Write-Host "💡 Copy RDP settings above for best results"
+          Write-Host "=========================================="
+
+      - name: Latency Monitoring
+        run: |
+          Write-Host "📊 Monitoring latency to Vietnam..."
+          $counter = 0
+          
+          while ($true) {
+            $counter++
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+            
+            if ($tsIP -and $counter % 5 -eq 0) {
+              # Kiểm tra ping và hiển thị thông tin độ trễ
+              try {
+                $ping = Test-Connection -ComputerName $tsIP -Count 3 -ErrorAction Stop
+                $avgPing = ($ping | Measure-Object -Property ResponseTime -Average).Average
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Ping: $([math]::Round($avgPing))ms | Session: ${counter}m"
+                
+                if ($avgPing -gt 200) {
+                  Write-Host "⚠️  High latency detected - Consider using exit nodes"
+                }
+              } catch {
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Ping check failed"
+              }
+            } else {
+              if ($counter % 10 -eq 0) {
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Active - ${counter}m"
+              }
+            }
+            
+            Start-Sleep -Seconds 60
+          }
