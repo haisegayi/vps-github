@@ -1,0 +1,164 @@
+name: RDP Mobile Optimized
+
+on:
+  workflow_dispatch:
+
+env:
+  FIXED_PASSWORD: "Mobile@1234"
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Check and Clean Previous Session
+        run: |
+          Write-Host "🧹 Cleaning previous session..."
+          # Dừng các process cũ
+          Get-Process "tailscale*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Service "Tailscale*" -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+
+      - name: Ultra Fast RDP Setup
+        run: |
+          Write-Host "⚡ Ultra fast RDP setup..."
+          # Registry tối ưu tốc độ (chạy tuần tự để tránh conflict)
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 0 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v SecurityLayer /t REG_DWORD /d 0 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v MaxColorDepth /t REG_DWORD /d 16 /f
+          
+          # Firewall nhanh
+          netsh advfirewall firewall delete rule name="RDP" 2>$null
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+
+      - name: Instant User Setup
+        run: |
+          Write-Host "👤 Creating user..."
+          $securePass = ConvertTo-SecureString $env:FIXED_PASSWORD -AsPlainText -Force
+          
+          # Xóa user cũ nhanh
+          net user MobileUser /delete 2>$null
+          
+          # Tạo user mới với command nhanh
+          net user MobileUser $env:FIXED_PASSWORD /add /y /expires:never
+          net localgroup administrators MobileUser /add
+          net localgroup "Remote Desktop Users" MobileUser /add
+          
+          "RDP_USER=MobileUser" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Pre-installed Tailscale Check
+        id: tailscale_check
+        run: |
+          Write-Host "🔍 Checking Tailscale..."
+          if (Test-Path "$env:ProgramFiles\Tailscale\tailscale.exe") {
+            Write-Host "✅ Tailscale already installed"
+            echo "TAILSCALE_INSTALLED=true" >> $env:GITHUB_ENV
+          } else {
+            echo "TAILSCALE_INSTALLED=false" >> $env:GITHUB_ENV
+          }
+
+      - name: Quick Tailscale Install
+        if: env.TAILSCALE_INSTALLED == 'false'
+        run: |
+          Write-Host "📥 Installing Tailscale..."
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          # Tải và cài đặt nhanh
+          curl -s -o $installerPath $tsUrl
+          Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait -NoNewWindow
+          Remove-Item $installerPath -Force
+
+      - name: Fast Tailscale Connection
+        run: |
+          Write-Host "🔗 Connecting Tailscale..."
+          # Khởi động service nhanh
+          Start-Service "Tailscale" -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          
+          # Kết nối không chờ đợi
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --login-server=https://login.tailscale.com --accept-routes --hostname=rdp-$env:GITHUB_RUN_ID --timeout=10s
+          
+          # Lấy IP ngay lập tức
+          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+          if (-not $tsIP) {
+            # Thử lại nhanh
+            Start-Sleep -Seconds 1
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+          }
+          
+          if ($tsIP) {
+            "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "✅ Tailscale IP: $tsIP"
+          } else {
+            # Fallback - tiếp tục mà không cần IP
+            Write-Host "⚠️ Getting IP later..."
+            "TAILSCALE_IP=connecting..." | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+
+      - name: Instant Performance Boost
+        run: |
+          Write-Host "🚀 Performance boost..."
+          # Chỉ tối ưu những thứ thực sự cần thiết
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
+          # Tắt services không cần thiết
+          Stop-Service "SysMain" -Force -ErrorAction SilentlyContinue
+
+      - name: Quick Connection Info
+        run: |
+          # Lấy IP thực tế
+          $actualIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+          if (-not $actualIP) { $actualIP = "checking..." }
+          
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "🚀 ULTRA FAST RDP - READY IN 60s"
+          Write-Host "=========================================="
+          Write-Host "📍 IP: $actualIP"
+          Write-Host "👤 User: MobileUser"
+          Write-Host "🔑 Password: $env:FIXED_PASSWORD"
+          Write-Host ""
+          Write-Host "⚡ CONNECT NOW:"
+          Write-Host "1. Open Remote Desktop"
+          Write-Host "2. Enter: $actualIP"
+          Write-Host "3. User: MobileUser"
+          Write-Host "4. Password: $env:FIXED_PASSWORD"
+          Write-Host ""
+          Write-Host "💡 IP may update automatically"
+          Write-Host "=========================================="
+
+      - name: Background IP Updater
+        run: |
+          # Script cập nhật IP nền
+          $updateScript = {
+            while ($true) {
+              $currentIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+              if ($currentIP -and $currentIP -ne $using:actualIP) {
+                Write-Host "🔄 IP Updated: $currentIP"
+              }
+              Start-Sleep -Seconds 30
+            }
+          }
+          Start-Job -ScriptBlock $updateScript
+
+      - name: Lightweight Monitoring
+        run: |
+          Write-Host "📊 Light monitoring started..."
+          $startTime = Get-Date
+          $counter = 0
+          
+          while ($true) {
+            $counter++
+            $elapsed = (Get-Date) - $startTime
+            $minutes = [math]::Round($elapsed.TotalMinutes)
+            
+            # Log rất nhẹ nhàng
+            if ($minutes % 5 -eq 0) {
+              $currentIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+              Write-Host "[$(Get-Date -Format 'HH:mm')] Active: ${minutes}m | IP: $currentIP"
+            }
+            
+            Start-Sleep -Seconds 60
+          }
