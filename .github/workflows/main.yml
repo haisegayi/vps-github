@@ -1,0 +1,152 @@
+name: RDP Mobile Optimized
+
+on:
+  workflow_dispatch:
+
+env:
+  FIXED_PASSWORD: "Mobile@1234"  # Password cố định
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Parallel Setup - Fast Optimization
+        run: |
+          # Chạy song song các tác vụ để tăng tốc
+          $jobs = @()
+          
+          # Job 1: RDP Registry Optimization
+          $jobs += Start-Job -ScriptBlock {
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          }
+          
+          # Job 2: Performance Settings
+          $jobs += Start-Job -ScriptBlock {
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxMonitors" -Value 4 -Force
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxXResolution" -Value 1920 -Force
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxYResolution" -Value 1080 -Force
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "MaxColorDepth" -Value 16 -Force
+          }
+          
+          # Job 3: Network Optimization
+          $jobs += Start-Job -ScriptBlock {
+            Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name "Tcp1323Opts" -Value 1 -Force
+            Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -Name "TCPWindowSize" -Value 64240 -Force
+          }
+          
+          # Chờ tất cả job hoàn thành
+          $jobs | Wait-Job | Receive-Job
+          
+          # Firewall config
+          netsh advfirewall firewall delete rule name="RDP" 2>$null
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          
+          Restart-Service -Name TermService -Force
+
+      - name: Fast User Creation
+        run: |
+          $securePass = ConvertTo-SecureString $env:FIXED_PASSWORD -AsPlainText -Force
+          
+          # Xóa user cũ nếu tồn tại (để tránh lỗi)
+          $existingUser = Get-LocalUser -Name "MobileUser" -ErrorAction SilentlyContinue
+          if ($existingUser) {
+              Remove-LocalUser -Name "MobileUser"
+          }
+          
+          New-LocalUser -Name "MobileUser" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "MobileUser"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "MobileUser"
+          
+          "RDP_USER=MobileUser" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Quick Tailscale Install & Setup
+        run: |
+          # Tải và cài đặt Tailscale nhanh
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          # Tải xuống với timeout ngắn
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath -TimeoutSec 30
+          
+          # Cài đặt không chờ đợi
+          Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -NoNewWindow -Wait
+          Remove-Item $installerPath -Force
+          
+          # Chờ ngắn để service khởi động
+          Start-Sleep -Seconds 3
+
+      - name: Configure Tailscale for Low Latency
+        run: |
+          # Cấu hình Tailscale cho tốc độ tốt nhất
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --login-server=https://login.tailscale.com --accept-routes --hostname=fast-rdp-$env:GITHUB_RUN_ID
+          
+          # Đợi kết nối
+          $tsIP = $null
+          for ($i = 0; $i -lt 10; $i++) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+            if ($tsIP) { 
+              "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Append
+              break 
+            }
+            Start-Sleep -Seconds 2
+          }
+
+      - name: Quick Performance Tweaks
+        run: |
+          # Tối ưu nhanh - chỉ những thứ quan trọng nhất
+          Get-Service -Name "SysMain" | Stop-Service -Force -ErrorAction SilentlyContinue
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+          
+          Write-Host "✅ Quick performance optimizations applied"
+
+      - name: Display Optimized Connection Info
+        run: |
+          Write-Host "=========================================="
+          Write-Host "🚀 OPTIMIZED MOBILE RDP - FAST SETUP"
+          Write-Host "=========================================="
+          Write-Host "IP: $env:TAILSCALE_IP"
+          Write-Host "User: MobileUser"
+          Write-Host "Password: $env:FIXED_PASSWORD"
+          Write-Host ""
+          Write-Host "🔗 QUICK CONNECT:"
+          Write-Host "1. Open Remote Desktop Connection"
+          Write-Host "2. Enter: $env:TAILSCALE_IP"
+          Write-Host "3. User: MobileUser"
+          Write-Host "4. Password: $env:FIXED_PASSWORD"
+          Write-Host ""
+          Write-Host "📱 OPTIMAL SETTINGS:"
+          Write-Host "• Display: 1280x720, 16-bit color"
+          Write-Host "• Experience: Low-speed broadband"
+          Write-Host "• Turn OFF: Persistent bitmap caching"
+          Write-Host "=========================================="
+
+          # Hiển thị RDP link đơn giản (không dùng file)
+          $rdpLink = "rdp://$env:TAILSCALE_IP"
+          Write-Host "📎 Quick RDP Link: $rdpLink"
+          Write-Host ""
+          Write-Host "💡 Tip: Copy the IP above for consistent connections"
+
+      - name: Fast Monitoring
+        run: |
+          Write-Host "🟢 RDP Session Ready - Monitoring..."
+          $counter = 0
+          while ($true) {
+            $counter++
+            
+            # Log đơn giản, ít tốn tài nguyên
+            if ($counter % 10 -eq 0) {
+              # Kiểm tra ping nhanh
+              $pingResult = Test-Connection -ComputerName $env:TAILSCALE_IP -Count 1 -Quiet -ErrorAction SilentlyContinue
+              Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Active - $counter minutes | IP: $env:TAILSCALE_IP | Ping: $pingResult"
+            } else {
+              if ($counter % 2 -eq 0) {
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Running..."  
+              }
+            }
+            
+            Start-Sleep -Seconds 60
+          }
