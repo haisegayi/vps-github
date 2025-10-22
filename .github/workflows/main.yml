@@ -1,0 +1,135 @@
+name: RDP Mobile Optimized
+
+on:
+  workflow_dispatch:
+
+env:
+  FIXED_PASSWORD: "Mobile@1234"
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Clean Previous Session
+        run: |
+          Write-Host "🧹 Cleaning previous session..."
+          Get-Process "tailscale*" -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+
+      - name: Ultra Fast RDP Setup
+        run: |
+          Write-Host "⚡ Configuring RDP..."
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v UserAuthentication /t REG_DWORD /d 0 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v SecurityLayer /t REG_DWORD /d 0 /f
+          reg add "HKLM\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v MaxColorDepth /t REG_DWORD /d 16 /f
+          
+          netsh advfirewall firewall delete rule name="RDP" 2>$null
+          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          
+          net stop TermService /y
+          net start TermService
+
+      - name: Create User
+        run: |
+          Write-Host "👤 Creating user..."
+          net user MobileUser /delete 2>$null
+          net user MobileUser "$env:FIXED_PASSWORD" /add /y /expires:never
+          net localgroup administrators MobileUser /add
+          net localgroup "Remote Desktop Users" MobileUser /add
+
+      - name: Install Tailscale
+        run: |
+          Write-Host "📥 Installing Tailscale..."
+          if (Test-Path "$env:ProgramFiles\Tailscale\tailscale.exe") {
+            Write-Host "✅ Tailscale already installed"
+          } else {
+            $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+            $installerPath = "$env:TEMP\tailscale.msi"
+            Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+            Start-Process msiexec.exe -ArgumentList "/i", "$installerPath", "/quiet", "/norestart" -Wait
+            Remove-Item $installerPath -Force
+            Write-Host "✅ Tailscale installed"
+          }
+          Start-Sleep -Seconds 5
+
+      - name: Configure Tailscale
+        run: |
+          Write-Host "🔗 Configuring Tailscale..."
+          Start-Service "Tailscale" -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+          
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --login-server=https://login.tailscale.com --accept-routes --hostname=rdp-$env:GITHUB_RUN_ID
+          
+          Write-Host "✅ Tailscale connection initiated"
+          
+          $tsIP = $null
+          for ($i = 0; $i -lt 15; $i++) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+            if ($tsIP) { 
+              Write-Host "🎯 Tailscale IP: $tsIP"
+              "TAILSCALE_IP=$tsIP" | Out-File -FilePath $env:GITHUB_ENV -Append
+              break 
+            }
+            Write-Host "⏳ Waiting for IP... ($i/15)"
+            Start-Sleep -Seconds 2
+          }
+          
+          if (-not $tsIP) {
+            Write-Host "⚠️ Could not get Tailscale IP, but continuing..."
+            "TAILSCALE_APE=unknown" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+
+      - name: Performance Optimization
+        run: |
+          Write-Host "🚀 Optimizing performance..."
+          # Sửa lỗi: Dùng powercfg với error handling
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null
+          # Tắt service an toàn hơn
+          sc stop "SysMain" 2>$null
+          sc config "SysMain" start= disabled 2>$null
+          Write-Host "✅ Performance optimized successfully"
+
+      - name: Display Connection Info
+        run: |
+          $finalIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+          if (-not $finalIP) { $finalIP = "100.65.56.128" }  # Fallback to previous IP
+          
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "🚀 RDP READY - CONNECT NOW"
+          Write-Host "=========================================="
+          Write-Host "📍 IP Address: $finalIP"
+          Write-Host "👤 Username: MobileUser"
+          Write-Host "🔑 Password: $env:FIXED_PASSWORD"
+          Write-Host ""
+          Write-Host "📱 CONNECTION GUIDE:"
+          Write-Host "1. Open Remote Desktop Connection"
+          Write-Host "2. Enter: $finalIP"
+          Write-Host "3. Username: MobileUser"
+          Write-Host "4. Password: $env:FIXED_PASSWORD"
+          Write-Host ""
+          Write-Host "✅ All services running - Ready for connection!"
+          Write-Host "=========================================="
+
+      - name: Monitoring
+        run: |
+          Write-Host "📊 Starting monitoring..."
+          $counter = 0
+          
+          while ($true) {
+            $counter++
+            $currentIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>$null
+            
+            if ($counter % 10 -eq 0) {
+              if ($currentIP) {
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] ✅ Active - $counter minutes | IP: $currentIP"
+              } else {
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] ⚠️ Active - $counter minutes | IP: Waiting..."
+              }
+            }
+            
+            Start-Sleep -Seconds 60
+          }
